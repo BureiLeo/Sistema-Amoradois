@@ -1,0 +1,189 @@
+<?php
+
+namespace App\Livewire\Forms;
+
+use App\Enums\ContaCaixa;
+use App\Models\Produto;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Collection;
+use Illuminate\Validation\Rule;
+use Livewire\Form;
+
+class ProdutoForm extends Form
+{
+    public ?Produto $produto = null;
+
+    public ?int $categoria_id = null;
+
+    public string $conta = 'canecas';
+
+    public string $nome = '';
+
+    public ?string $sku = null;
+
+    public string $preco_venda = '';
+
+    public ?string $custo_referencia = null;
+
+    public ?string $estoque_minimo = null;
+
+    /** @var array<int, array{material_id: int|string|null, quantidade: string}> */
+    public array $bom = [];
+
+    public string $margem_lucro = '';
+
+    /** @var UploadedFile|null Nova imagem selecionada nesta sessao de edicao. */
+    public $novaImagem = null;
+
+    public bool $ativo = true;
+
+    protected function rules(): array
+    {
+        return [
+            'categoria_id' => ['nullable', 'exists:categorias,id'],
+            'conta' => ['required', Rule::in(array_column(ContaCaixa::linhas(), 'value'))],
+            'nome' => ['required', 'string', 'max:120'],
+            'sku' => [
+                'nullable', 'string', 'max:60',
+                Rule::unique('produtos', 'sku')->ignore($this->produto?->id),
+            ],
+            // Aceita tanto "18.90" quanto "18,90" (formato brasileiro)
+            // digitado pelo usuario - a rule "numeric" padrao do Laravel
+            // rejeita virgula, o que causava falha de validacao
+            // silenciosa (bug real encontrado e corrigido nesta etapa).
+            'preco_venda' => ['required', 'regex:/^\d+([.,]\d{1,2})?$/'],
+            'custo_referencia' => ['nullable', 'regex:/^\d+([.,]\d{1,2})?$/'],
+            'estoque_minimo' => ['nullable', 'regex:/^\d+([.,]\d{1,3})?$/'],
+            'bom' => ['array'],
+            'bom.*.material_id' => [
+                'required',
+                'integer',
+                'distinct',
+                Rule::exists('materiais', 'id')->whereNull('deleted_at'),
+            ],
+            'bom.*.quantidade' => [
+                'required',
+                'regex:/^\d+([.,]\d{1,4})?$/',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if ((float) str_replace(',', '.', (string) $value) <= 0) {
+                        $fail('A quantidade deve ser maior que zero.');
+                    }
+                },
+            ],
+            'margem_lucro' => ['nullable', 'regex:/^\d+([.,]\d{1,2})?$/'],
+            'novaImagem' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+            'ativo' => ['boolean'],
+        ];
+    }
+
+    protected function messages(): array
+    {
+        return [
+            'preco_venda.required' => 'Informe o preço de venda.',
+            'preco_venda.regex' => 'Informe um preço válido (ex: 29,90).',
+            'custo_referencia.regex' => 'Informe um valor válido (ex: 12,50).',
+            'estoque_minimo.regex' => 'Informe uma quantidade válida (ex: 5).',
+            'bom.*.material_id.required' => 'Selecione o material.',
+            'bom.*.material_id.distinct' => 'Cada material pode aparecer apenas uma vez na receita.',
+            'bom.*.material_id.exists' => 'O material selecionado não está mais disponível.',
+            'bom.*.quantidade.required' => 'Informe a quantidade utilizada.',
+            'bom.*.quantidade.regex' => 'Informe uma quantidade válida com até 4 casas decimais.',
+            'margem_lucro.regex' => 'Informe uma porcentagem válida (ex: 30 ou 30,5).',
+            'sku.unique' => 'Este SKU já está em uso por outro produto.',
+        ];
+    }
+
+    public function setProduto(Produto $produto): void
+    {
+        $this->produto = $produto;
+        $this->categoria_id = $produto->categoria_id;
+        $this->conta = $produto->conta ?? ContaCaixa::Canecas->value;
+        $this->nome = $produto->nome;
+        $this->sku = $produto->sku;
+        $this->preco_venda = (string) $produto->preco_venda;
+        $this->custo_referencia = $produto->custo_referencia !== null ? (string) $produto->custo_referencia : null;
+        $this->estoque_minimo = $produto->estoque_minimo !== null ? (string) $produto->estoque_minimo : null;
+        $this->ativo = $produto->ativo;
+        $this->bom = $produto->bom()
+            ->orderBy('id')
+            ->get(['material_id', 'quantidade'])
+            ->map(fn ($item) => [
+                'material_id' => $item->material_id,
+                'quantidade' => (string) $item->quantidade,
+            ])
+            ->all();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function dadosNormalizados(): array
+    {
+        return [
+            'categoria_id' => $this->categoria_id ?: null,
+            'conta' => $this->conta,
+            'nome' => trim($this->nome),
+            'sku' => $this->sku ? trim($this->sku) : null,
+            'preco_venda' => str_replace(',', '.', (string) $this->preco_venda),
+            'custo_referencia' => $this->custo_referencia !== null && $this->custo_referencia !== ''
+                ? str_replace(',', '.', (string) $this->custo_referencia)
+                : null,
+            'estoque_minimo' => $this->estoque_minimo !== null && $this->estoque_minimo !== ''
+                ? str_replace(',', '.', (string) $this->estoque_minimo)
+                : null,
+            'ativo' => $this->ativo,
+        ];
+    }
+
+    /**
+     * @return array<int, array{material_id: int, quantidade: string}>
+     */
+    public function bomNormalizado(): array
+    {
+        return array_map(fn (array $item) => [
+            'material_id' => (int) $item['material_id'],
+            'quantidade' => str_replace(',', '.', (string) $item['quantidade']),
+        ], $this->bom);
+    }
+
+    /**
+     * @param  Collection<int, object{id: int, custo_medio: string}>  $materiais
+     */
+    public function custoBom(Collection $materiais): float
+    {
+        $custos = $materiais->pluck('custo_medio', 'id');
+
+        return round(array_reduce($this->bom, function (float $total, array $item) use ($custos): float {
+            $quantidade = $this->numeroDecimal($item['quantidade'] ?? null);
+            $materialId = (int) ($item['material_id'] ?? 0);
+
+            if ($quantidade === null || $quantidade <= 0 || ! $custos->has($materialId)) {
+                return $total;
+            }
+
+            return $total + ($quantidade * (float) $custos->get($materialId));
+        }, 0.0), 6);
+    }
+
+    public function precoSugerido(float $custoBom): ?float
+    {
+        $margem = $this->numeroDecimal($this->margem_lucro);
+
+        if ($margem === null) {
+            return null;
+        }
+
+        return round($custoBom * (1 + ($margem / 100)), 2);
+    }
+
+    private function numeroDecimal(mixed $valor): ?float
+    {
+        if ($valor === null || $valor === '') {
+            return null;
+        }
+
+        $normalizado = str_replace(',', '.', (string) $valor);
+
+        return is_numeric($normalizado) ? (float) $normalizado : null;
+    }
+}

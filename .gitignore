@@ -1,0 +1,10 @@
+# Credenciais e configuração local — nunca versionar
+config.php
+
+# Dumps de banco (contêm dados reais de clientes/vendas)
+*.sql
+
+# Arquivos de SO/IDE
+Thumbs.db
+.DS_Store
+.vscode/
